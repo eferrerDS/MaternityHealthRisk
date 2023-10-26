@@ -1,0 +1,465 @@
+---
+title: "Maternity Health Risk - Classification System"
+author: "Ernesto Ferrer Mena"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+Evaluating the risk during pregnancy aids in anticipating the likelihood of adverse health events in women, empowering healthcare providers to deliver perinatal care tailored to the assessed level of risk offering significant improvements in several birth outcomes metrics used in Quality Departments in health insurance companies. Metrics like prenatal births, C-Sections, infant mortality, etc. reducing liquidated damages for such companies. The application of machine learning algorithms can provide significant advantages for patients, providers and insurance companies.
+
+## Overview
+
+Rural areas are the most impacted on several health indicators because of lack of healthcare services when comparing with urban areas within the same country. Prenatal services are not an exception. The dataset selected for the risk classification was *"Maternal Health Risk"* by Marzia Ahmed with data collected in the rural areas of Bangladesh, donated on 8/14/2023.
+
+Dataset citation: Ahmed,Marzia. (2023). Maternal Health Risk. UCI Machine Learning Repository. <https://doi.org/10.24432/C5DP5D>. Follow the link for more details about the dataset.
+
+The dataset has 7 variables and 1014 observations with important data about the patients. I went into a more detailed description about it in the section Analysis. Three different methods were tested and finally I recommended the one with the best results.
+
+## Executive Summary
+
+## Analysis
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#----Install libraries----
+if(!require(dplyr)) install.packages("dplyr", repos = "http://cran.us.r-project.org")
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+if(!require(class)) install.packages("class", repos = "http://cran.us.r-project.org")
+if(!require(e1071)) install.packages("e1071", repos = "http://cran.us.r-project.org")
+if(!require(knitr)) install.packages("knitr", repos = "http://cran.us.r-project.org")
+
+library(corrplot)   
+library(e1071)
+library(class)
+library(randomForest)
+library(dplyr)
+library(ggplot2)
+library(data.table)
+library(readr)
+library(caret)
+library(knitr)
+
+#----Importing dataset----
+
+options(timeout = 120)
+
+dl <- "maternal+health+risk.zip"
+if(!file.exists(dl))
+  download.file("https://archive.ics.uci.edu/dataset/863/maternal+health+risk", dl)
+
+df <- "Maternal Health Risk Data Set.csv"
+if(!file.exists(df))
+  unzip(dl, df)
+
+ds <- read_csv("Maternal Health Risk Data Set.csv")
+
+#Training set and testing set----
+set.seed(1, sample.kind = "Rounding") #if using R 3.6 or later
+#set.seed(1) #if using R3.5 or earlier
+final_test_index <- createDataPartition(y = ds$RiskLevel, times = 1, p = .1, list = FALSE)
+temp_ds <- ds[-final_test_index,]
+validation_index <- createDataPartition(y= temp_ds$RiskLevel, times = 1, p = .2, list = FALSE)
+
+training <- temp_ds[-validation_index,]
+validation <- temp_ds[validation_index,]
+final_test <- ds[final_test_index,]
+
+```
+
+### Exploratory Analysis
+
+*"Maternity Health Risk"* has 1014 observations, six features, and the class column called *"RiskLevel"*. Those features are Age as *"Age"*, Systolic Blood Pressure as *"SystolicBP"*, Diastolic Blood Pressure as *"DiastolicBP"*, Sugar in Blood as *"BS"*, Body Temperature as *"BodyTemp"*, Heart Rate as *"HeartRate"*, and the Risk Level as *"RiskLevel"*. Here is a preview of the dataset:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+kable(head(training))
+```
+
+With *"summay()"* function we can get a first approach of each of the six features in the dataset. We can see the minimum and maximum values, the median and important quartiles:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#Exploratory Analysis----
+####Summary Excluding 'RiskLevel' column ----
+kable(summary(training[,-7]))
+```
+
+Observe what happens with each feature once we divide the dataset by *RiskLevel* and summarize them:
+
+Summary for *RiskLevel = "high risk"*:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+hr <- training %>% filter(RiskLevel == "high risk")
+kable(summary(hr[,-7]))
+```
+
+Summary for *RiskLevel = "mid risk"*:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+mr <- training %>% filter(RiskLevel == "mid risk")
+kable(summary(mr[,-7]))
+```
+
+Summary for *RiskLevel = "low risk"*:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+lr <- training %>% filter(RiskLevel == "low risk")
+kable(summary(lr[,-7]))
+```
+
+As you can see, the mean decreases for each feature when the risk level also decreases.
+
+Lets look into the distribution of each feature to understand better the population within the dataset. I am going to plot the general population for each feature and then I will slice it into the three risk levels. In the order they appeared in the summary table we have the following:
+
+#### Age
+
+```{r Age density distribution, echo=FALSE, message=FALSE, warning=FALSE}
+
+training%>%ggplot(aes(Age, fill=""))+
+  geom_density()+
+  theme_minimal()+
+  scale_fill_brewer(palette="Blues")+
+  guides(fill="none")+
+  labs(title = "Age density distribution")
+```
+
+```{r Age distribution by RiskLevel, echo=FALSE, message=FALSE, warning=FALSE}
+
+training%>%ggplot(aes(Age, fill = RiskLevel))+
+  geom_density()+
+  theme_minimal()+
+  scale_fill_brewer(palette="Blues") +
+  facet_wrap(~RiskLevel)+
+  labs(title = "Age distribution by RiskLevel")
+```
+
+We can see some differences but, the most obvious is *high risk*. Its density tend to be higher in the older population while *low risk* is concentrated more around the 20's and *mid risk* starts on the 20's and almost disappears close to 35.
+
+#### SystolicBP
+
+```{r SystolicBP density distribution, echo=FALSE, message=FALSE, warning=FALSE}
+training%>%ggplot(aes(SystolicBP, fill=""))+
+  geom_density()+
+  theme_minimal()+
+  scale_fill_brewer(palette="Blues")+
+  guides(fill="none")+
+  labs(title = "SystolicBP density distribution")
+```
+
+```{r Systolic distribution by RiskLevel, echo=FALSE, message=FALSE, warning=FALSE}
+
+training%>%ggplot(aes(SystolicBP, fill = RiskLevel))+
+  geom_density()+
+  theme_minimal()+
+  scale_fill_brewer(palette="Blues") +
+  facet_wrap(~RiskLevel)+
+  labs(title = "SystolicBP distribution by RiskLevel")
+```
+
+While *low risk* and *mid risk* seems very alike and the first don't reach the 140, the latest almost insignificant at 140 but *high risk* density is the highest at that same value.
+
+#### DiastolicBP
+
+```{r DiastolicBP density distribution, echo=FALSE, message=FALSE, warning=FALSE}
+training%>%ggplot(aes(DiastolicBP, fill=""))+
+  geom_density()+
+  theme_minimal()+
+  scale_fill_brewer(palette="Blues")+
+  guides(fill="none")+
+  labs(title = "DiastolicBP density distribution")
+```
+
+```{r DiastolicBP distribution by RiskLevel, echo=FALSE, message=FALSE, warning=FALSE}
+training%>%ggplot(aes(DiastolicBP, fill = RiskLevel))+
+  geom_density()+
+  theme_minimal()+
+  scale_fill_brewer(palette="Blues") +
+  facet_wrap(~RiskLevel)+
+  labs(title = "DiastolicBP distribution by RiskLevel")
+```
+
+The main observation in the previous plots is that *high risk* density increases when *DiastolicBP's* value also increases. It's evident in the plots that the highest density for *high risk* is when it is closer to 100 while in the other two risk levels decreases when approaching to the same value.
+
+#### BS
+
+```{r BS density distribution, echo=FALSE, message=FALSE, warning=FALSE}
+training%>%ggplot(aes(BS, fill=""))+
+  geom_density()+
+  theme_minimal()+
+  scale_fill_brewer(palette="Blues")+
+  guides(fill="none")+
+  labs(title = "BS density distribution")
+```
+
+```{r BS distribution by RiskLevel, echo=FALSE, message=FALSE, warning=FALSE}
+training%>%ggplot(aes(BS, fill = RiskLevel))+
+  geom_density()+
+  theme_minimal()+
+  scale_fill_brewer(palette="Blues") +
+  facet_wrap(~RiskLevel)+
+  labs(title = "BS distribution by RiskLevel")
+```
+
+Most of the population has a BS of less than 7 of close to it except *high risk* population that presents a very steady densities values almost regardless the BS.
+
+#### BodyTemp
+
+```{r BodyTemp density distribution, echo=FALSE, message=FALSE, warning=FALSE}
+training%>%ggplot(aes(BodyTemp, fill=""))+
+  geom_density()+
+  theme_minimal()+
+  scale_fill_brewer(palette="Blues")+
+  guides(fill="none")+
+  labs(title = "BodyTemp density distribution")
+```
+
+```{r BodyTempDistByRiskLevel, echo = FALSE, message=FALSE, warning=FALSE}
+
+training%>%ggplot(aes(BodyTemp, fill = RiskLevel))+
+  geom_density()+
+  theme_minimal()+
+  scale_fill_brewer(palette="Blues") +
+  facet_wrap(~RiskLevel)+
+  labs(title = "BodyTemp distribution by RiskLevel")
+```
+
+Around a *BodyTemp* of 98 *low risk* population has the highest density value, close to 1, and some very small differences around a temperature of 101.
+
+#### HeartRate
+
+```{r HeartRate density distribution, echo=FALSE, message=FALSE, warning=FALSE}
+training%>%ggplot(aes(HeartRate, fill=""))+
+  geom_density()+
+  theme_minimal()+
+  scale_fill_brewer(palette="Blues")+
+  guides(fill="none")+
+  labs(title = "HeartRate density distribution")
+```
+
+```{r HeartRate distribution by RiskLevel,echo=FALSE,message=FALSE, warning=FALSE}
+
+training%>%ggplot(aes(HeartRate, fill = RiskLevel))+
+  geom_density()+
+  theme_minimal()+
+  scale_fill_brewer(palette="Blues") +
+  facet_wrap(~RiskLevel)+
+  labs(title = "HeartRate distribution by RiskLevel")
+```
+
+While HeartRate density distributions for *low risk* and *mid risk* are very alike, and generally speaking the value doesn't go down 50, the distribution for *high risk* stays bellow a density value of less than 0.05 while the others surpasses 0.07.
+
+#### Correlation matrix heat-map
+
+It is time now to analyze any possible correlation between the different factors. With the following heat-map we can see that there are some interesting values between some of them.
+
+```{r CorrelationMatrix, echo=FALSE, message=FALSE, warning=FALSE}
+#Calculate correlation Matrix and create a heatmap with correlation values
+correlation_matrix <- cor(training[,c("Age","SystolicBP","DiastolicBP", "BS", "BodyTemp","HeartRate")])
+corrplot(correlation_matrix, method = "color", type = "upper", order = "hclust", addCoef.col = "black", tl.col = "black")
+
+```
+
+There is no surprise about the correlation between both blood pressures but, we car see that some other values (in blue) show that a weak positive correlation exist between factors like Age and BS, and both blood pressures and Age and BS.
+
+## Methods
+
+I used three methods for this project and those are Naive Bayes, Random Forest and K-Nearest Neighbors (KNN). To measure the accuracy of each method the dataset was divided in three: *training*, *validation*, and *final_test*. The dataset final_test has 10% of the observation in the original dataset while training has 80% of the remaining and validation the other 20%. Once I have finished training and evaluating each method with training and validation datasets I evaluated the one with the best result using the final_test.
+
+This is the code used to split the original dataset:
+
+``` r
+#Training set and testing set----
+
+set.seed(1, sample.kind = "Rounding") #if using R 3.6 or later
+
+#set.seed(1) #if using R3.5 or earlier
+
+final_test_index <- createDataPartition(y = ds$RiskLevel, times = 1, p = .1, list = FALSE)
+
+temp_ds <- ds[-final_test_index,]
+
+validation_index <- createDataPartition(y= temp_ds$RiskLevel, times = 1, p = .2, list = FALSE)
+
+training <- temp_ds[-validation_index,]
+
+validation <- temp_ds[validation_index,]
+
+final_test <- ds[final_test_index,]
+```
+
+### Method I - Naive Bayes
+
+Naive Bayes constitutes a group of straightforward probabilistic classifiers that leverage Bayes' theorem while making robust independence assumptions among features. These classifiers find application in tasks like text classification, aiming to capture the input distribution within a specific class or category. Notwithstanding their simple design and oversimplified assumptions, Naive Bayes classifiers demonstrate high scalability and can attain notable accuracy levels, especially when combined with kernel density estimation. Despite their naive characteristics, they have proven effective in addressing various complex real-world situations.
+
+To implement Naive Bayes in this project I used the package e1071 by David Meyer. The code will look like this:
+
+``` r
+# Create a Naive Bayes model
+nb_model <- naiveBayes(RiskLevel ~ BodyTemp + HeartRate + DiastolicBP + SystolicBP + Age + BS, data = training)
+
+# Make predictions on the training data
+predictions <- predict(nb_model, validation)
+
+# Display the confusion matrix
+conf_matrix <- table(predictions, validation$RiskLevel)
+
+# Calculate accuracy
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+```
+
+### Method II - Random Forest
+
+The Random Forest algorithm is employed in both classification and regression tasks within machine learning. As an ensemble learning method, it builds multiple decision trees during training and determines the class chosen by the majority of trees for classification or the mean/average prediction for regression. Random Forests address the tendency of decision trees to overfit their training sets, offering a correction mechanism. Notably scalable, they can effectively manage large datasets characterized by high dimensionality. Random Forests have found application in diverse fields, including remote sensing, bioinformatics, and computer vision.
+
+The package used for Random Forest was randomForest by Andy Liaw and matthew Wiener based on original Fortran code by Leo Breimen and Adele Cutler. Its used will look like this:
+
+``` r
+
+# Copy datasets and convert "RiskLevel" to a factor
+rf_training <- training
+rf_training$RiskLevel <- as.factor(rf_training$RiskLevel)
+rf_validation <- validation
+rf_validation$RiskLevel <- as.factor(rf_validation$RiskLevel)
+
+# Create a Random Forest model
+rf_model <- randomForest(RiskLevel ~ BodyTemp + HeartRate + DiastolicBP + SystolicBP + Age + BS,
+                         data = rf_training,
+                         ntree = 500,  # Number of trees in the forest
+                         importance = TRUE)
+
+# Make predictions on the training data
+predictions <- predict(rf_model, newdata = rf_validation)
+
+# confusion matrix
+conf_matrix <- table(predictions, rf_validation$RiskLevel)
+
+# Calculate accuracy
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+```
+
+### Method III - K-Nearest Neighbors
+
+The K-Nearest Neighbors (KNN) algorithm, a non-parametric supervised learning approach for classification and regression tasks, relies on the concept that similar data points are proximate in the feature space. This method identifies the k nearest data points in the training set to a given test point and classifies the test point based on the majority class among its k nearest neighbors.
+
+KNN stands out for its simplicity, making it easily understandable and implementable. Its interpretability is high, allowing for straightforward explanations to non-technical stakeholders. However, its computational demands can be significant, especially with large datasets and high-dimensional feature spaces.
+
+The package used for KNN was class. This package has the function knn() used for classification that calculate the Euclidean distance and its code looks like this:
+
+``` r
+
+# Create a k-NN model
+knn_model <- knn(train = rf_training[, c("BodyTemp", "HeartRate", "DiastolicBP", "SystolicBP", "Age", "BS")],
+                 test = rf_validation[, c("BodyTemp", "HeartRate", "DiastolicBP", "SystolicBP", "Age", "BS")],
+                 cl = rf_training$RiskLevel,
+                 k = 3)  # Specify the number of neighbors (k)
+
+# Display the confusion matrix
+conf_matrix <- table(knn_model, rf_validation$RiskLevel)
+
+# Calculate accuracy
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+```
+
+## Results
+
+```{r Results, echo=FALSE, message=FALSE, warning=FALSE}
+#Methods----
+##Naive Bayes----
+
+# Create a Naive Bayes model
+nb_model <- naiveBayes(RiskLevel ~ BodyTemp + HeartRate + DiastolicBP + SystolicBP + Age + BS,
+                       data = training)
+
+
+# Make predictions on the training data
+predictions <- predict(nb_model, validation)
+
+conf_matrix <- table(predictions, validation$RiskLevel)
+
+# Calculate accuracy
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+
+results <- tibble(method = "Naive Bayes", Accuracy =sum(diag(conf_matrix)) / sum(conf_matrix))
+##Random Forest----
+
+# Copy datasets and convert "RiskLevel" to a factor
+rf_training <- training
+rf_training$RiskLevel <- as.factor(rf_training$RiskLevel)
+rf_validation <- validation
+rf_validation$RiskLevel <- as.factor(rf_validation$RiskLevel)
+
+# Create a Random Forest model
+rf_model <- randomForest(RiskLevel ~ BodyTemp + HeartRate + DiastolicBP + SystolicBP + Age + BS,
+                         data = rf_training,
+                         ntree = 500,  # Number of trees in the forest
+                         importance = TRUE)
+
+
+# Make predictions on the training data
+predictions <- predict(rf_model, newdata = rf_validation)
+
+conf_matrix <- table(predictions, rf_validation$RiskLevel)
+
+# Calculate accuracy
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+
+results <- bind_rows(results, tibble(method = "Random Forest", Accuracy = sum(diag(conf_matrix)) / sum(conf_matrix)))
+
+##K-nearest method (KNN)----
+
+#Since we will need "RiskLevel" as a factor but we did it in the previous method we will use those datasets instead of creating new ones
+
+
+# Create a k-NN model
+knn_model <- knn(train = rf_training[, c("BodyTemp", "HeartRate", "DiastolicBP", "SystolicBP", "Age", "BS")],
+                 test = rf_validation[, c("BodyTemp", "HeartRate", "DiastolicBP", "SystolicBP", "Age", "BS")],
+                 cl = rf_training$RiskLevel,
+                 k = 3)  # Specify the number of neighbors (k)
+
+conf_matrix <- table(knn_model, rf_validation$RiskLevel)
+
+# Calculate accuracy
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+
+results <- bind_rows(results, tibble(method = "KNN", Accuracy = sum(diag(conf_matrix)) / sum(conf_matrix)))
+
+```
+
+After testing each method, the best result was produced by Random Forest. The following code test the Random Forest method with the Final_test dataset and displays the accuracy of each method along the final result:
+
+``` r
+# Let's prepare the final_test data set by conferting RiskLevel to a factor
+final_test$RiskLevel <- as.factor(final_test$RiskLevel)
+# Make predictions on the final_test data
+
+predictions <- predict(rf_model, newdata = final_test)
+conf_matrix <- table(predictions, final_test$RiskLevel)
+results <- bind_rows(results, tibble(method = "Final", Accuracy = sum(diag(conf_matrix)) / sum(conf_matrix)))
+kable(results)
+```
+
+```{r ShowResults,echo=FALSE, message=FALSE, warning=FALSE}
+# Since the best result was with random forest method, we will test the accuracy with our final_test dataset to get the final result
+# Let's prepare the final_test data set by conferting RiskLevel to a factor
+final_test$RiskLevel <- as.factor(final_test$RiskLevel)
+# Make predictions on the final_test data
+
+predictions <- predict(rf_model, newdata = final_test)
+conf_matrix <- table(predictions, final_test$RiskLevel)
+results <- bind_rows(results, tibble(method = "Final", Accuracy = sum(diag(conf_matrix)) / sum(conf_matrix)))
+kable(results)
+```
+
+## Conclusion
+
+Each method used during the development of the project is commonly used on classification systems. Even when all of them are created for this, in this scenario Random Forest produced the best result. It is also incredible how with so little data this algorithms have the ability to predict with high accuracy. During the development I didn't took into consideration some characteristics specific to healthcare. One of the improvements that could be implemented is increasing sensitivity even when that could mean that patients that aren't high risk are classified as one. When working with live threatening data it is better to be safe.
+
+## 
